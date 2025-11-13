@@ -1,15 +1,25 @@
-title: Remote System Discovery via Net View
+title: Network Enumeration via Net View
+id: 1e4b6f3c-7f9e-4c3d-8e5a-9c2d1f4e6b3a
 status: experimental
-description: Detects net.exe view command
-logsource:
-    category: process_creation
-    product: windows
-detection:
-    selection:
-        Image|endswith: '\net.exe'
-        CommandLine|contains: 'view'
-    condition: selection
-level: medium
+description: Detects network enumeration using the 'net view' command
+references:
+  - https://attack.mitre.org/techniques/T1018/
+author: Austin Mundy
+date: 2025-11-13
+modified: 2025-11-13
 tags:
-    - attack.discovery
-    - attack.t1018
+  - attack.discovery
+  - attack.t1018
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  selection:
+    EventID: 1  # Sysmon Process Creation
+    Image|endswith: '\net.exe'
+    CommandLine|contains: 'view'
+  condition: selection
+falsepositives:
+  - Legitimate administrative activity
+  - Network monitoring tools
+level: low
