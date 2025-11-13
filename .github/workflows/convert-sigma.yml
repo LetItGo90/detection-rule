@@ -1,6 +1,7 @@
 name: Convert Sigma to Elastic EQL
 
 on:
+  workflow_dispatch:
   push:
     paths:
       - 'sigma-rules/**'
@@ -33,7 +34,7 @@ jobs:
         run: |
           mkdir -p elastic-rules/windows
           for file in sigma-rules/**/*.yml; do
-            sigma convert -t eql -f eql --without-pipeline "$file" > "elastic-rules/windows/$(basename ${file%.yml}.eql)"
+            sigma convert -t eql --without-pipeline "$file" > "elastic-rules/windows/$(basename ${file%.yml}.eql)"
           done
       
       - name: Commit to GitHub
@@ -45,7 +46,7 @@ jobs:
           
           mkdir -p elastic-rules/windows
           for file in sigma-rules/**/*.yml; do
-            sigma convert -t eql -f eql --without-pipeline "$file" > "elastic-rules/windows/$(basename ${file%.yml}.eql)"
+            sigma convert -t eql --without-pipeline "$file" > "elastic-rules/windows/$(basename ${file%.yml}.eql)"
           done
           
           git add elastic-rules/
