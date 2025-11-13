@@ -78,6 +78,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git pull origin main --rebase  # 👈 ADD THIS LINE
           git add elastic-rules/
           git diff --staged --quiet || git commit -m "Auto-convert Sigma rules [skip ci]"
           git push
