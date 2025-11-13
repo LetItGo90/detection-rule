@@ -4,12 +4,21 @@ on:
   push:
     paths:
       - 'sigma-rules/**'
+    branches:
+      - main
+
+permissions:
+  contents: write
 
 jobs:
   convert:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout with full history
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -22,10 +31,34 @@ jobs:
       
       - name: Convert Sigma to EQL
         run: |
-          mkdir -p elastic-rules
-          for file in sigma-rules/*.yml; do
-            sigma convert -t elasticsearch -f eql "$file" > "elastic-rules/$(basename ${file%.yml}.eql)"
+          mkdir -p elastic-rules/windows
+          for file in sigma-rules/**/*.yml; do
+            sigma convert -t elasticsearch -f eql "$file" > "elastic-rules/windows/$(basename ${file%.yml}.eql)"
           done
+      
+      - name: Commit converted rules to GitHub
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Fetch latest changes
+          git fetch origin main
+          git reset --hard origin/main
+          
+          # Recreate the EQL files
+          mkdir -p elastic-rules/windows
+          for file in sigma-rules/**/*.yml; do
+            sigma convert -t elasticsearch -f eql "$file" > "elastic-rules/windows/$(basename ${file%.yml}.eql)"
+          done
+          
+          # Commit and push
+          git add elastic-rules/
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Auto-convert Sigma rules [skip ci]"
+            git push origin main
+          fi
       
       - name: Push to Elastic SIEM
         env:
@@ -47,38 +80,33 @@ jobs:
               'Content-Type': 'application/json'
           }
           
-          for eql_file in Path('elastic-rules').glob('*.eql'):
+          for eql_file in Path('elastic-rules').rglob('*.eql'):
               with open(eql_file) as f:
                   query = f.read().strip()
               
               rule_data = {
-                  'name': eql_file.stem,
+                  'name': eql_file.stem.replace('-', ' ').title(),
                   'description': f'Auto-converted from Sigma: {eql_file.stem}',
                   'type': 'eql',
                   'language': 'eql',
                   'query': query,
                   'risk_score': 50,
                   'severity': 'medium',
-                  'enabled': True
+                  'enabled': True,
+                  'index': ['logs-*', 'winlogbeat-*', 'filebeat-*']
               }
               
               response = requests.post(
                   f'{elastic_url}/api/detection_engine/rules',
                   headers=headers,
-                  json=rule_data
+                  json=rule_data,
+                  verify=True
               )
               
               if response.status_code in [200, 201]:
-                  print(f'✅ Imported: {eql_file.name}')
+                  print(f'✅ Imported to Elastic: {eql_file.name}')
               else:
-                  print(f'❌ Failed: {eql_file.name} - {response.text}')
+                  print(f'❌ Failed: {eql_file.name}')
+                  print(f'   Status: {response.status_code}')
+                  print(f'   Response: {response.text}')
           EOF
-      
-      - name: Commit converted rules
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git pull origin main --rebase  # 👈 ADD THIS LINE
-          git add elastic-rules/
-          git diff --staged --quiet || git commit -m "Auto-convert Sigma rules [skip ci]"
-          git push
