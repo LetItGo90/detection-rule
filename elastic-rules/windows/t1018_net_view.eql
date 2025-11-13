@@ -1,1 +1,0 @@
-any where process.executable:"*\\net.exe" and process.command_line:"*view*"
