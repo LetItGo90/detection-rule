@@ -33,7 +33,7 @@ jobs:
         run: |
           mkdir -p elastic-rules/windows
           for file in sigma-rules/**/*.yml; do
-            sigma convert -t elasticsearch -f eql "$file" > "elastic-rules/windows/$(basename ${file%.yml}.eql)"
+            sigma convert -t eql -f eql "$file" > "elastic-rules/windows/$(basename ${file%.yml}.eql)"
           done
       
       - name: Commit converted rules to GitHub
@@ -41,17 +41,14 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
-          # Fetch latest changes
           git fetch origin main
           git reset --hard origin/main
           
-          # Recreate the EQL files
           mkdir -p elastic-rules/windows
           for file in sigma-rules/**/*.yml; do
-            sigma convert -t elasticsearch -f eql "$file" > "elastic-rules/windows/$(basename ${file%.yml}.eql)"
+            sigma convert -t eql -f eql "$file" > "elastic-rules/windows/$(basename ${file%.yml}.eql)"
           done
           
-          # Commit and push
           git add elastic-rules/
           if git diff --staged --quiet; then
             echo "No changes to commit"
