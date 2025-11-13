@@ -30,11 +30,19 @@ jobs:
         run: |
           pip install sigma-cli pysigma-backend-elasticsearch requests pyyaml
       
+      - name: Create minimal pipeline
+        run: |
+          cat > /tmp/minimal-pipeline.yml << 'PIPELINE'
+          name: minimal
+          priority: 10
+          transformations: []
+          PIPELINE
+      
       - name: Convert Sigma to EQL
         run: |
           mkdir -p elastic-rules/windows
           for file in sigma-rules/**/*.yml; do
-            sigma convert -t eql --without-pipeline "$file" > "elastic-rules/windows/$(basename ${file%.yml}.eql)"
+            sigma convert -t eql -p /tmp/minimal-pipeline.yml "$file" > "elastic-rules/windows/$(basename ${file%.yml}.eql)" 2>&1 || echo "Failed: $file"
           done
       
       - name: Commit to GitHub
@@ -46,7 +54,7 @@ jobs:
           
           mkdir -p elastic-rules/windows
           for file in sigma-rules/**/*.yml; do
-            sigma convert -t eql --without-pipeline "$file" > "elastic-rules/windows/$(basename ${file%.yml}.eql)"
+            sigma convert -t eql -p /tmp/minimal-pipeline.yml "$file" > "elastic-rules/windows/$(basename ${file%.yml}.eql)" 2>&1 || echo "Failed: $file"
           done
           
           git add elastic-rules/
@@ -76,8 +84,8 @@ jobs:
               with open(eql_file) as f:
                   query = f.read().strip()
               
-              if not query:
-                  print(f'⚠️  Skipping empty: {eql_file.name}')
+              if not query or 'Failed:' in query or 'Traceback' in query:
+                  print(f'⚠️  Skipping invalid: {eql_file.name}')
                   continue
               
               rule_name = eql_file.stem.replace('-', ' ').replace('_', ' ').title()
