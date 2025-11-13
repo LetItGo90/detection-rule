@@ -1,0 +1,54 @@
+name: Convert Sigma to Elastic EQL
+
+on:
+  push:
+    paths:
+      - 'sigma-rules/**/*.yml'
+  workflow_dispatch:
+
+jobs:
+  convert:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Setup Sigma CLI
+      uses: SigmaHQ/sigma-cli-action@v1
+      with:
+        version: latest
+    
+    - name: Install Elastic Backend
+      run: |
+        pip install pysigma-backend-elasticsearch pysigma-pipeline-windows
+    
+    - name: Validate Sigma Rules
+      uses: SigmaHQ/sigma-validator-action@v1
+      with:
+        rules-directory: sigma-rules/
+    
+    - name: Convert to Elastic EQL
+      run: |
+        mkdir -p elastic-rules/windows
+        for file in sigma-rules/windows/*.yml; do
+          if [ -f "$file" ]; then
+            filename=$(basename "$file" .yml)
+            sigma convert -t eql -p ecs_windows "$file" > "elastic-rules/windows/${filename}.eql"
+            echo "Converted: $filename"
+          fi
+        done
+    
+    - name: Commit converted rules
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git add elastic-rules/
+        if git diff --staged --quiet; then
+          echo "No changes to commit"
+        else
+          git commit -m "Auto-convert Sigma rules to EQL [skip ci]"
+          git push
+        fi
