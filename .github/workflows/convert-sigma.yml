@@ -14,7 +14,7 @@ jobs:
   convert:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout with full history
+      - name: Checkout
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
@@ -33,42 +33,36 @@ jobs:
         run: |
           mkdir -p elastic-rules/windows
           for file in sigma-rules/**/*.yml; do
-            sigma convert -t eql -f eql "$file" > "elastic-rules/windows/$(basename ${file%.yml}.eql)"
+            sigma convert -t eql -f eql --without-pipeline "$file" > "elastic-rules/windows/$(basename ${file%.yml}.eql)"
           done
       
-      - name: Commit converted rules to GitHub
+      - name: Commit to GitHub
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          
           git fetch origin main
           git reset --hard origin/main
           
           mkdir -p elastic-rules/windows
           for file in sigma-rules/**/*.yml; do
-            sigma convert -t eql -f eql "$file" > "elastic-rules/windows/$(basename ${file%.yml}.eql)"
+            sigma convert -t eql -f eql --without-pipeline "$file" > "elastic-rules/windows/$(basename ${file%.yml}.eql)"
           done
           
           git add elastic-rules/
-          if git diff --staged --quiet; then
-            echo "No changes to commit"
-          else
-            git commit -m "Auto-convert Sigma rules [skip ci]"
-            git push origin main
-          fi
+          git diff --staged --quiet || git commit -m "Auto-convert Sigma rules [skip ci]"
+          git push origin main
       
-      - name: Push to Elastic SIEM
+      - name: Deploy to Elastic SIEM
         env:
           ELASTIC_URL: ${{ secrets.ELASTIC_URL }}
           ELASTIC_API_KEY: ${{ secrets.ELASTIC_API_KEY }}
         run: |
           python3 << 'EOF'
           import os
-          import json
           import requests
           from pathlib import Path
-
-          elastic_url = os.environ['ELASTIC_URL']
+          
+          elastic_url = os.environ['ELASTIC_URL'].rstrip('/')
           api_key = os.environ['ELASTIC_API_KEY']
           
           headers = {
@@ -81,29 +75,36 @@ jobs:
               with open(eql_file) as f:
                   query = f.read().strip()
               
-              rule_data = {
-                  'name': eql_file.stem.replace('-', ' ').title(),
+              if not query:
+                  print(f'⚠️  Skipping empty: {eql_file.name}')
+                  continue
+              
+              rule_name = eql_file.stem.replace('-', ' ').replace('_', ' ').title()
+              
+              rule = {
+                  'name': rule_name,
                   'description': f'Auto-converted from Sigma: {eql_file.stem}',
                   'type': 'eql',
                   'language': 'eql',
                   'query': query,
                   'risk_score': 50,
                   'severity': 'medium',
-                  'enabled': True,
-                  'index': ['logs-*', 'winlogbeat-*', 'filebeat-*']
+                  'enabled': False,
+                  'interval': '5m',
+                  'from': 'now-6m',
+                  'index': ['logs-*', 'winlogbeat-*', 'filebeat-*', 'endgame-*']
               }
               
               response = requests.post(
                   f'{elastic_url}/api/detection_engine/rules',
                   headers=headers,
-                  json=rule_data,
-                  verify=True
+                  json=rule
               )
               
               if response.status_code in [200, 201]:
-                  print(f'✅ Imported to Elastic: {eql_file.name}')
+                  print(f'✅ {eql_file.name}')
               else:
-                  print(f'❌ Failed: {eql_file.name}')
-                  print(f'   Status: {response.status_code}')
-                  print(f'   Response: {response.text}')
+                  print(f'❌ {eql_file.name}')
+                  print(f'   HTTP {response.status_code}')
+                  print(f'   {response.text[:200]}')
           EOF
