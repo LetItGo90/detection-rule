@@ -6,6 +6,9 @@ on:
       - 'sigma-rules/**/*.yml'
   workflow_dispatch:
 
+permissions:
+  contents: write  # ✅ Add this!
+
 jobs:
   convert:
     runs-on: ubuntu-latest
@@ -15,6 +18,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}  # ✅ Add this!
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -48,5 +52,5 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add elastic-rules/
-          git diff --staged --quiet || git commit -m "Auto-convert Sigma rules to EQL"
+          git diff --staged --quiet || git commit -m "Auto-convert Sigma rules to EQL [skip ci]"
           git push
