@@ -16,19 +16,19 @@ jobs:
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
     
-    - name: Setup Sigma CLI
-      uses: SigmaHQ/sigma-cli-action@v1
-      with:
-        version: latest
-    
-    - name: Install Elastic Backend
-      run: |
-        pip install pysigma-backend-elasticsearch pysigma-pipeline-windows
-    
     - name: Validate Sigma Rules
-      uses: SigmaHQ/sigma-validator-action@v1
+      uses: SigmaHQ/sigma-rules-validator@v1.0.0
       with:
-        rules-directory: sigma-rules/
+        paths: './sigma-rules'
+    
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Install Sigma CLI
+      run: |
+        pip install sigma-cli pysigma-backend-elasticsearch pysigma-pipeline-windows
     
     - name: Convert to Elastic EQL
       run: |
@@ -37,7 +37,7 @@ jobs:
           if [ -f "$file" ]; then
             filename=$(basename "$file" .yml)
             sigma convert -t eql -p ecs_windows "$file" > "elastic-rules/windows/${filename}.eql"
-            echo "Converted: $filename"
+            echo "✅ Converted: $filename"
           fi
         done
     
@@ -49,6 +49,6 @@ jobs:
         if git diff --staged --quiet; then
           echo "No changes to commit"
         else
-          git commit -m "Auto-convert Sigma rules to EQL [skip ci]"
+          git commit -m "🤖 Auto-convert Sigma rules to EQL [skip ci]"
           git push
         fi
