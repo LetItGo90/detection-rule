@@ -1,4 +1,4 @@
-name: Convert Sigma to Elastic EQL
+name: Convert Sigma to Elastic Query DSL
 
 on:
   workflow_dispatch:
@@ -30,19 +30,11 @@ jobs:
         run: |
           pip install sigma-cli pysigma-backend-elasticsearch requests pyyaml
       
-      - name: Create minimal pipeline
-        run: |
-          cat > /tmp/minimal-pipeline.yml << 'PIPELINE'
-          name: minimal
-          priority: 10
-          transformations: []
-          PIPELINE
-      
-      - name: Convert Sigma to EQL
+      - name: Convert Sigma to Elasticsearch Query DSL
         run: |
           mkdir -p elastic-rules/windows
           for file in sigma-rules/**/*.yml; do
-            sigma convert -t eql -p /tmp/minimal-pipeline.yml "$file" > "elastic-rules/windows/$(basename ${file%.yml}.eql)" 2>&1 || echo "Failed: $file"
+            sigma convert -t elasticsearch -f dsl_lucene "$file" > "elastic-rules/windows/$(basename ${file%.yml}.json)" 2>&1 || echo "Failed: $file"
           done
       
       - name: Commit to GitHub
@@ -54,7 +46,7 @@ jobs:
           
           mkdir -p elastic-rules/windows
           for file in sigma-rules/**/*.yml; do
-            sigma convert -t eql -p /tmp/minimal-pipeline.yml "$file" > "elastic-rules/windows/$(basename ${file%.yml}.eql)" 2>&1 || echo "Failed: $file"
+            sigma convert -t elasticsearch -f dsl_lucene "$file" > "elastic-rules/windows/$(basename ${file%.yml}.json)" 2>&1 || echo "Failed: $file"
           done
           
           git add elastic-rules/
@@ -71,6 +63,7 @@ jobs:
           python3 << 'EOF'
           import os
           import requests
+          import json
           from pathlib import Path
           
           elastic_url = os.environ.get('ELASTIC_URL', '')
@@ -94,22 +87,28 @@ jobs:
               'Content-Type': 'application/json'
           }
           
-          for eql_file in Path('elastic-rules').rglob('*.eql'):
-              with open(eql_file) as f:
-                  query = f.read().strip()
+          for query_file in Path('elastic-rules').rglob('*.json'):
+              with open(query_file) as f:
+                  content = f.read().strip()
               
-              if not query or 'Failed:' in query or 'Traceback' in query:
-                  print(f'⚠️  Skipping invalid: {eql_file.name}')
+              if not content or 'Failed:' in content or 'Traceback' in content:
+                  print(f'⚠️  Skipping invalid: {query_file.name}')
                   continue
               
-              rule_name = eql_file.stem.replace('-', ' ').replace('_', ' ').title()
+              try:
+                  query_obj = json.loads(content)
+              except:
+                  print(f'⚠️  Skipping non-JSON: {query_file.name}')
+                  continue
+              
+              rule_name = query_file.stem.replace('-', ' ').replace('_', ' ').title()
               
               rule = {
                   'name': rule_name,
-                  'description': f'Auto-converted from Sigma: {eql_file.stem}',
-                  'type': 'eql',
-                  'language': 'eql',
-                  'query': query,
+                  'description': f'Auto-converted from Sigma: {query_file.stem}',
+                  'type': 'query',
+                  'language': 'lucene',
+                  'query': query_obj,
                   'risk_score': 50,
                   'severity': 'medium',
                   'enabled': False,
@@ -125,9 +124,9 @@ jobs:
               )
               
               if response.status_code in [200, 201]:
-                  print(f'✅ {eql_file.name}')
+                  print(f'✅ {query_file.name}')
               else:
-                  print(f'❌ {eql_file.name}')
+                  print(f'❌ {query_file.name}')
                   print(f'   HTTP {response.status_code}')
                   print(f'   {response.text[:200]}')
           EOF
