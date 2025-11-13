@@ -63,16 +63,30 @@ jobs:
       
       - name: Deploy to Elastic SIEM
         env:
-          ELASTIC_URL: ${{ secrets.ELASTIC_URL }}
+          ELASTIC_URL: ${{ secrets.ELASTIC_KIBANA_URL }}
           ELASTIC_API_KEY: ${{ secrets.ELASTIC_API_KEY }}
         run: |
+          echo "ELASTIC_URL is set: ${ELASTIC_URL:+yes}"
+          echo "ELASTIC_API_KEY is set: ${ELASTIC_API_KEY:+yes}"
           python3 << 'EOF'
           import os
           import requests
           from pathlib import Path
           
-          elastic_url = os.environ['ELASTIC_URL'].rstrip('/')
-          api_key = os.environ['ELASTIC_API_KEY']
+          elastic_url = os.environ.get('ELASTIC_URL', '')
+          api_key = os.environ.get('ELASTIC_API_KEY', '')
+          
+          if not elastic_url:
+              print('❌ ELASTIC_URL is not set!')
+              exit(1)
+          
+          if not api_key:
+              print('❌ ELASTIC_API_KEY is not set!')
+              exit(1)
+          
+          elastic_url = elastic_url.rstrip('/')
+          
+          print(f'Using Elastic URL: {elastic_url[:30]}...')
           
           headers = {
               'Authorization': f'ApiKey {api_key}',
