@@ -1,0 +1,2 @@
+Parsing Sigma rules
+any where event.code:1 and process.executable:"*\\net.exe" and process.command_line:"*view*"
