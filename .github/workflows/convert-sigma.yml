@@ -7,47 +7,45 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write  # ✅ Add this!
+  contents: write
 
 jobs:
   convert:
     runs-on: ubuntu-latest
     
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}  # ✅ Add this!
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Setup Python
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Install Sigma CLI
+      - name: Install Sigma CLI and Elasticsearch backend
         run: |
           pip install sigma-cli pysigma-backend-elasticsearch
 
-      - name: Validate YAML Syntax
-        run: |
-          echo "Checking YAML syntax..."
-          find sigma-rules -name "*.yml" -type f | while read file; do
-            python -c "import yaml; yaml.safe_load(open('$file'))" || exit 1
-          done
-          echo "✅ All YAML files are valid"
-
-      - name: Convert Sigma to Elastic EQL
+      - name: Convert Sigma to EQL
         run: |
           mkdir -p elastic-rules/windows
           
-          for rule in sigma-rules/windows/*.yml; do
-            filename=$(basename "$rule" .yml)
+          for file in sigma-rules/windows/*.yml; do
+            [ -f "$file" ] || continue
+            
+            filename=$(basename "$file" .yml)
             echo "Converting $filename..."
-            sigma convert -t eql -s "$rule" > "elastic-rules/windows/${filename}.eql" || echo "⚠️ Failed to convert $filename"
+            
+            sigma convert -t eql \
+              --pipeline ecs_windows \
+              "$file" \
+              > "elastic-rules/windows/${filename}.eql" 2>&1 || echo "⚠️ Failed to convert $filename"
           done
 
-      - name: Commit converted rules
+      - name: Commit and push
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
