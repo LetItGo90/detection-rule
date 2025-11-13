@@ -1,2 +1,2 @@
 Parsing Sigma rules
-any where event.code:1 and process.executable:"*\\net.exe" and process.command_line:"*view*"
+any where EventID:1 and Image:"*\\net.exe" and CommandLine:"*view*"
