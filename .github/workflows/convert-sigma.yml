@@ -25,9 +25,9 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install Sigma CLI and Elasticsearch backend
+      - name: Install dependencies
         run: |
-          pip install sigma-cli pysigma-backend-elasticsearch
+          pip install sigma-cli pysigma-backend-elasticsearch requests pyyaml
 
       - name: Convert Sigma to EQL
         run: |
@@ -45,10 +45,65 @@ jobs:
               > "elastic-rules/windows/${filename}.eql" 2>&1 || echo "⚠️ Failed to convert $filename"
           done
 
-      - name: Commit and push
+      - name: Push rules to Elastic Security
+        env:
+          ELASTIC_API_KEY: ${{ secrets.ELASTIC_API_KEY }}
+          ELASTIC_KIBANA_URL: ${{ secrets.ELASTIC_KIBANA_URL }}
+        run: |
+          python3 << 'EOF'
+          import os
+          import json
+          import requests
+          import yaml
+          from pathlib import Path
+          
+          KIBANA_URL = os.environ['ELASTIC_KIBANA_URL']
+          API_KEY = os.environ['ELASTIC_API_KEY']
+          
+          headers = {
+              'Authorization': f'ApiKey {API_KEY}',
+              'kbn-xsrf': 'true',
+              'Content-Type': 'application/json'
+          }
+          
+          for eql_file in Path('elastic-rules/windows').glob('*.eql'):
+              with open(eql_file, 'r') as f:
+                  eql_query = f.read().strip()
+              
+              sigma_file = Path('sigma-rules/windows') / f'{eql_file.stem}.yml'
+              with open(sigma_file, 'r') as f:
+                  sigma_rule = yaml.safe_load(f)
+              
+              rule_data = {
+                  'name': sigma_rule.get('title', eql_file.stem),
+                  'description': sigma_rule.get('description', ''),
+                  'risk_score': 21,
+                  'severity': 'low',
+                  'type': 'eql',
+                  'language': 'eql',
+                  'query': eql_query,
+                  'enabled': False,
+                  'interval': '5m',
+                  'from': 'now-6m'
+              }
+              
+              print(f"📤 Pushing rule: {rule_data['name']}")
+              
+              url = f"{KIBANA_URL}/api/detection_engine/rules"
+              response = requests.post(url, headers=headers, json=rule_data, verify=True)
+              
+              if response.status_code in [200, 201]:
+                  print(f"  ✅ Created: {rule_data['name']}")
+              else:
+                  print(f"  ❌ Failed: {response.status_code} - {response.text}")
+          
+          print("\n✅ All rules pushed!")
+          EOF
+
+      - name: Commit converted rules
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add elastic-rules/
-          git diff --staged --quiet || git commit -m "Auto-convert Sigma rules to EQL [skip ci]"
+          git diff --staged --quiet || git commit -m "Auto-convert Sigma rules [skip ci]"
           git push
