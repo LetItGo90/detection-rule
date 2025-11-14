@@ -1,0 +1,4 @@
+Usage: sigma convert [OPTIONS] INPUT...
+Try 'sigma convert -h' for help.
+
+Error: Invalid value for '--target' / '-t': 'elasticsearch' is not one of 'lucene', 'eql', 'esql', 'elastalert'. - run sigma plugin list --plugin-type backend for a list of available plugins.
