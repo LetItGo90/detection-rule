@@ -1,4 +1,4 @@
-name: Convert Sigma to Elastic Query DSL
+name: Convert Sigma to Elastic Rules
 
 on:
   workflow_dispatch:
@@ -28,58 +28,25 @@ jobs:
       
       - name: Install dependencies
         run: |
-          pip install sigma-cli pysigma-backend-elasticsearch requests pyyaml
+          pip install requests pyyaml
       
-      - name: Convert Sigma to Elasticsearch Query DSL
-        run: |
-          mkdir -p elastic-rules/windows
-          for file in sigma-rules/**/*.yml; do
-            sigma convert -t elasticsearch -f dsl_lucene "$file" > "elastic-rules/windows/$(basename ${file%.yml}.json)" 2>&1 || echo "Failed: $file"
-          done
-      
-      - name: Commit to GitHub
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git fetch origin main
-          git reset --hard origin/main
-          
-          mkdir -p elastic-rules/windows
-          for file in sigma-rules/**/*.yml; do
-            sigma convert -t elasticsearch -f dsl_lucene "$file" > "elastic-rules/windows/$(basename ${file%.yml}.json)" 2>&1 || echo "Failed: $file"
-          done
-          
-          git add elastic-rules/
-          git diff --staged --quiet || git commit -m "Auto-convert Sigma rules [skip ci]"
-          git push origin main
-      
-      - name: Deploy to Elastic SIEM
+      - name: Convert and Deploy Sigma Rules
         env:
           ELASTIC_URL: ${{ secrets.ELASTIC_KIBANA_URL }}
           ELASTIC_API_KEY: ${{ secrets.ELASTIC_API_KEY }}
         run: |
-          echo "ELASTIC_URL is set: ${ELASTIC_URL:+yes}"
-          echo "ELASTIC_API_KEY is set: ${ELASTIC_API_KEY:+yes}"
           python3 << 'EOF'
           import os
+          import yaml
           import requests
-          import json
           from pathlib import Path
           
-          elastic_url = os.environ.get('ELASTIC_URL', '')
+          elastic_url = os.environ.get('ELASTIC_URL', '').rstrip('/')
           api_key = os.environ.get('ELASTIC_API_KEY', '')
           
-          if not elastic_url:
-              print('❌ ELASTIC_URL is not set!')
+          if not elastic_url or not api_key:
+              print('❌ Missing Elastic credentials!')
               exit(1)
-          
-          if not api_key:
-              print('❌ ELASTIC_API_KEY is not set!')
-              exit(1)
-          
-          elastic_url = elastic_url.rstrip('/')
-          
-          print(f'Using Elastic URL: {elastic_url[:30]}...')
           
           headers = {
               'Authorization': f'ApiKey {api_key}',
@@ -87,46 +54,75 @@ jobs:
               'Content-Type': 'application/json'
           }
           
-          for query_file in Path('elastic-rules').rglob('*.json'):
-              with open(query_file) as f:
-                  content = f.read().strip()
+          # Simple Sigma to KQL converter for Windows process events
+          def sigma_to_kql(sigma_dict):
+              detection = sigma_dict.get('detection', {})
+              selection = detection.get('selection', {})
               
-              if not content or 'Failed:' in content or 'Traceback' in content:
-                  print(f'⚠️  Skipping invalid: {query_file.name}')
-                  continue
+              conditions = []
               
-              try:
-                  query_obj = json.loads(content)
-              except:
-                  print(f'⚠️  Skipping non-JSON: {query_file.name}')
-                  continue
-              
-              rule_name = query_file.stem.replace('-', ' ').replace('_', ' ').title()
-              
-              rule = {
-                  'name': rule_name,
-                  'description': f'Auto-converted from Sigma: {query_file.stem}',
-                  'type': 'query',
-                  'language': 'lucene',
-                  'query': query_obj,
-                  'risk_score': 50,
-                  'severity': 'medium',
-                  'enabled': False,
-                  'interval': '5m',
-                  'from': 'now-6m',
-                  'index': ['logs-*', 'winlogbeat-*', 'filebeat-*', 'endgame-*']
+              # Map Sigma fields to ECS fields
+              field_mapping = {
+                  'EventID': 'event.code',
+                  'Image': 'process.executable',
+                  'CommandLine': 'process.command_line',
+                  'ParentImage': 'process.parent.executable',
+                  'User': 'user.name'
               }
               
-              response = requests.post(
-                  f'{elastic_url}/api/detection_engine/rules',
-                  headers=headers,
-                  json=rule
-              )
+              for field, value in selection.items():
+                  ecs_field = field_mapping.get(field, field.lower())
+                  
+                  if isinstance(value, str):
+                      if '*' in value:
+                          # Wildcard match
+                          clean_value = value.replace('*', '')
+                          conditions.append(f'{ecs_field}: *{clean_value}*')
+                      else:
+                          conditions.append(f'{ecs_field}: "{value}"')
+                  elif isinstance(value, int):
+                      conditions.append(f'{ecs_field}: {value}')
               
-              if response.status_code in [200, 201]:
-                  print(f'✅ {query_file.name}')
-              else:
-                  print(f'❌ {query_file.name}')
-                  print(f'   HTTP {response.status_code}')
-                  print(f'   {response.text[:200]}')
+              return ' and '.join(conditions)
+          
+          for sigma_file in Path('sigma-rules').rglob('*.yml'):
+              print(f'\n📄 Processing: {sigma_file.name}')
+              
+              with open(sigma_file) as f:
+                  sigma_rule = yaml.safe_load(f)
+              
+              try:
+                  kql_query = sigma_to_kql(sigma_rule)
+                  
+                  rule = {
+                      'name': sigma_rule.get('title', sigma_file.stem),
+                      'description': sigma_rule.get('description', 'Converted from Sigma'),
+                      'type': 'query',
+                      'language': 'kuery',
+                      'query': kql_query,
+                      'risk_score': 50,
+                      'severity': 'medium',
+                      'enabled': False,
+                      'interval': '5m',
+                      'from': 'now-6m',
+                      'index': ['logs-*', 'winlogbeat-*', 'filebeat-*', 'endgame-*'],
+                      'tags': sigma_rule.get('tags', [])
+                  }
+                  
+                  print(f'   Query: {kql_query}')
+                  
+                  response = requests.post(
+                      f'{elastic_url}/api/detection_engine/rules',
+                      headers=headers,
+                      json=rule
+                  )
+                  
+                  if response.status_code in [200, 201]:
+                      print(f'   ✅ Deployed successfully')
+                  else:
+                      print(f'   ❌ Failed: HTTP {response.status_code}')
+                      print(f'   {response.text[:300]}')
+              
+              except Exception as e:
+                  print(f'   ⚠️  Error: {str(e)}')
           EOF
