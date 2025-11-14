@@ -54,19 +54,18 @@ jobs:
               'Content-Type': 'application/json'
           }
           
-          # Simple Sigma to KQL converter for Windows process events
           def sigma_to_kql(sigma_dict):
               detection = sigma_dict.get('detection', {})
               selection = detection.get('selection', {})
               
               conditions = []
               
-              # Map Sigma fields to ECS fields
               field_mapping = {
                   'EventID': 'event.code',
                   'Image': 'process.executable',
                   'CommandLine': 'process.command_line',
                   'ParentImage': 'process.parent.executable',
+                  'ParentCommandLine': 'process.parent.command_line',
                   'User': 'user.name'
               }
               
@@ -75,13 +74,18 @@ jobs:
                   
                   if isinstance(value, str):
                       if '*' in value:
-                          # Wildcard match
-                          clean_value = value.replace('*', '')
-                          conditions.append(f'{ecs_field}: *{clean_value}*')
+                          # Wildcard - no quotes
+                          conditions.append(f'{ecs_field}: {value}')
                       else:
+                          # Exact match - with quotes
                           conditions.append(f'{ecs_field}: "{value}"')
-                  elif isinstance(value, int):
-                      conditions.append(f'{ecs_field}: {value}')
+                  elif isinstance(value, (int, float)):
+                      # Number - with quotes
+                      conditions.append(f'{ecs_field}: "{value}"')
+                  elif isinstance(value, list):
+                      # OR condition
+                      or_vals = ' or '.join([f'"{v}"' if '*' not in str(v) else str(v) for v in value])
+                      conditions.append(f'{ecs_field}: ({or_vals})')
               
               return ' and '.join(conditions)
           
@@ -93,6 +97,8 @@ jobs:
               
               try:
                   kql_query = sigma_to_kql(sigma_rule)
+                  
+                  print(f'   📝 KQL: {kql_query}')
                   
                   rule = {
                       'name': sigma_rule.get('title', sigma_file.stem),
@@ -109,8 +115,6 @@ jobs:
                       'tags': sigma_rule.get('tags', [])
                   }
                   
-                  print(f'   Query: {kql_query}')
-                  
                   response = requests.post(
                       f'{elastic_url}/api/detection_engine/rules',
                       headers=headers,
@@ -118,10 +122,11 @@ jobs:
                   )
                   
                   if response.status_code in [200, 201]:
-                      print(f'   ✅ Deployed successfully')
+                      print(f'   ✅ Deployed')
+                  elif response.status_code == 409:
+                      print(f'   ⚠️  Already exists')
                   else:
-                      print(f'   ❌ Failed: HTTP {response.status_code}')
-                      print(f'   {response.text[:300]}')
+                      print(f'   ❌ HTTP {response.status_code}: {response.text[:200]}')
               
               except Exception as e:
                   print(f'   ⚠️  Error: {str(e)}')
