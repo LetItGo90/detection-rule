@@ -1,25 +1,153 @@
-title: Network Enumeration via Net View
-id: 1e4b6f3c-7f9e-4c3d-8e5a-9c2d1f4e6b3a
-status: experimental
-description: Detects network enumeration using the 'net view' command
-references:
-  - https://attack.mitre.org/techniques/T1018/
-author: Austin Mundy
-date: 2025-11-13
-modified: 2025-11-13
-tags:
-  - attack.discovery
-  - attack.t1018
-logsource:
-  category: process_creation
-  product: windows
-detection:
-  selection:
-    EventID: 1  # Sysmon Process Creation
-    Image|endswith: '\net.exe'
-    CommandLine|contains: 'view'
-  condition: selection
-falsepositives:
-  - Legitimate administrative activity
-  - Network monitoring tools
-level: low
+name: Convert Sigma to Elastic Rules
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'sigma-rules/**'
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  convert:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          pip install requests pyyaml
+      
+      - name: Convert and Deploy Sigma Rules
+        env:
+          ELASTIC_URL: ${{ secrets.ELASTIC_KIBANA_URL }}
+          ELASTIC_API_KEY: ${{ secrets.ELASTIC_API_KEY }}
+        run: |
+          python3 << 'EOF'
+          import os
+          import yaml
+          import requests
+          from pathlib import Path
+          
+          elastic_url = os.environ.get('ELASTIC_URL', '').rstrip('/')
+          api_key = os.environ.get('ELASTIC_API_KEY', '')
+          
+          if not elastic_url or not api_key:
+              print('❌ Missing Elastic credentials!')
+              exit(1)
+          
+          headers = {
+              'Authorization': f'ApiKey {api_key}',
+              'kbn-xsrf': 'true',
+              'Content-Type': 'application/json'
+          }
+          
+          # Convert Sigma fields to proper KQL
+          def sigma_to_kql(sigma_dict):
+              detection = sigma_dict.get('detection', {})
+              selection = detection.get('selection', {})
+              
+              conditions = []
+              
+              # Map Sigma fields to ECS fields
+              field_mapping = {
+                  'EventID': 'event.code',
+                  'Image': 'process.executable',
+                  'CommandLine': 'process.command_line',
+                  'ParentImage': 'process.parent.executable',
+                  'ParentCommandLine': 'process.parent.command_line',
+                  'User': 'user.name',
+                  'LogonType': 'winlog.logon.type'
+              }
+              
+              for field, value in selection.items():
+                  ecs_field = field_mapping.get(field, field.lower())
+                  
+                  if isinstance(value, str):
+                      if value.startswith('*') and value.endswith('*'):
+                          # Contains
+                          clean_value = value.strip('*')
+                          conditions.append(f'{ecs_field}: *{clean_value}*')
+                      elif value.endswith('*'):
+                          # Starts with
+                          clean_value = value.rstrip('*')
+                          conditions.append(f'{ecs_field}: "{clean_value}"*')
+                      elif value.startswith('*'):
+                          # Ends with
+                          clean_value = value.lstrip('*')
+                          conditions.append(f'{ecs_field}: *"{clean_value}"')
+                      else:
+                          # Exact match
+                          conditions.append(f'{ecs_field}: "{value}"')
+                  elif isinstance(value, (int, float)):
+                      conditions.append(f'{ecs_field}: {value}')
+                  elif isinstance(value, list):
+                      # Multiple values (OR)
+                      or_conditions = []
+                      for v in value:
+                          if isinstance(v, str) and '*' in v:
+                              clean = v.strip('*')
+                              or_conditions.append(f'{ecs_field}: *{clean}*')
+                          else:
+                              or_conditions.append(f'{ecs_field}: "{v}"')
+                      conditions.append(f'({" or ".join(or_conditions)})')
+              
+              return ' and '.join(conditions)
+          
+          for sigma_file in Path('sigma-rules').rglob('*.yml'):
+              print(f'\n📄 Processing: {sigma_file.name}')
+              
+              with open(sigma_file) as f:
+                  sigma_rule = yaml.safe_load(f)
+              
+              try:
+                  kql_query = sigma_to_kql(sigma_rule)
+                  
+                  print(f'   📝 KQL Query: {kql_query}')
+                  
+                  rule = {
+                      'name': sigma_rule.get('title', sigma_file.stem),
+                      'description': sigma_rule.get('description', 'Converted from Sigma'),
+                      'type': 'query',
+                      'language': 'kuery',
+                      'query': kql_query,
+                      'risk_score': sigma_rule.get('level', 'medium') == 'high' and 75 or 50,
+                      'severity': sigma_rule.get('level', 'medium'),
+                      'enabled': False,
+                      'interval': '5m',
+                      'from': 'now-6m',
+                      'index': ['logs-*', 'winlogbeat-*', 'filebeat-*', 'endgame-*'],
+                      'tags': sigma_rule.get('tags', []) + ['sigma-converted']
+                  }
+                  
+                  response = requests.post(
+                      f'{elastic_url}/api/detection_engine/rules',
+                      headers=headers,
+                      json=rule
+                  )
+                  
+                  if response.status_code in [200, 201]:
+                      print(f'   ✅ Deployed to Elastic SIEM')
+                  elif response.status_code == 409:
+                      print(f'   ⚠️  Rule already exists')
+                  else:
+                      print(f'   ❌ Failed: HTTP {response.status_code}')
+                      print(f'   Response: {response.text[:300]}')
+              
+              except Exception as e:
+                  print(f'   ⚠️  Error: {str(e)}')
+                  import traceback
+                  traceback.print_exc()
+          EOF
