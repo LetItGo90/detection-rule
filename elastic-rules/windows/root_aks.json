@@ -1,0 +1,26 @@
+{
+  "name": "Root SSH Session to AKS Node",
+  "description": "Detects root user SSH sessions to Azure Kubernetes Service worker nodes. Direct node access as root is suspicious and violates security best practices.",
+  "type": "query",
+  "language": "kuery",
+  "query": "event.category: \"session\" AND user.name: \"root\" AND host.name: aks-nodepool*",
+  "risk_score": 73,
+  "severity": "high",
+  "enabled": true,
+  "interval": "5m",
+  "from": "now-6m",
+  "index": [
+    "logs-*"
+  ],
+  "tags": [
+    "Domain: Cloud",
+    "OS: Linux",
+    "Use Case: Threat Detection",
+    "Tactic: Initial Access",
+    "Data Source: Authentication Logs",
+    "MITRE ATT&CK: T1078.004",
+    "Azure",
+    "AKS",
+    "Kubernetes"
+  ]
+}
